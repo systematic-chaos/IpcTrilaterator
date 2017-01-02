@@ -83,7 +83,7 @@ void locationCoordinator(sphere* beacons, bool lazy) {
 	int n;
 	char s[32];
 	unsigned int beaconIds[nBeacons];
-	struct sembuf sops[nBeacons];
+	struct sembuf sops[nBeacons + 1];
 	for (n = 0; n < nBeacons; n++) {
 		beaconIds[n] = n + 1;
 		if (pthread_create(pIds + n, NULL, lazy ? lazyMeasure : eagerMeasure, (void*) (beaconIds + n))) {
@@ -96,6 +96,9 @@ void locationCoordinator(sphere* beacons, bool lazy) {
 		sops[n].sem_op = -1;
 		sops[n].sem_flg = 0;
 	}
+	sops[n].sem_num = (unsigned short) n;
+	sops[n].sem_op = 4;
+	sops[n].sem_flg = 0;
 	
 	double* sharedVar;
 	double r[nBeacons];
@@ -109,6 +112,8 @@ void locationCoordinator(sphere* beacons, bool lazy) {
 		for (n = 0; n < nBeacons; n++) {
 			beacons[n].r = r[n];
 		}
+		
+		semop(semId, sops + nBeacons, 1);
 		
 		if (nBeacons > 3) {
 			quatrilaterate(beacons, beacons + 1, beacons + 2, beacons + 3, &result);
@@ -126,10 +131,14 @@ void *lazyMeasure(void* bId) {
 	message input;
 	char s[32];
 	double measure;
-	struct sembuf sb;
-	sb.sem_num = beaconId - 1;
-	sb.sem_op = 1;
-	sb.sem_flg = 0;
+	struct sembuf sbArray;
+	sbArray.sem_num = beaconId - 1;
+	sbArray.sem_op = 1;
+	sbArray.sem_flg = 0;
+	struct sembuf sbMutex;
+	sbMutex.sem_num = nBeacons;
+	sbMutex.sem_op = -1;
+	sbMutex.sem_flg = 0;
 	double* sharedVar;
 	
 	while (TRUE) {
@@ -150,9 +159,11 @@ void *lazyMeasure(void* bId) {
 			sharedVar = (double*) shmat(shmId, NULL, 0);
 			*(sharedVar + beaconId - 1) = measure;
 			shmdt((void*) sharedVar);
-			semop(semId, &sb, 1);
+			semop(semId, &sbArray, 1);
 			
 			printf("Lazy measure %u: %.9f\n", beaconId, measure);
+			
+			semop(semId, &sbMutex, 1);
 		}
 	}
 }
@@ -165,10 +176,14 @@ void *eagerMeasure(void* bId) {
 	unsigned int qcount;
 	message input;
 	double measure;
-	struct sembuf sb;
-	sb.sem_num = beaconId - 1;
-	sb.sem_op = 1;
-	sb.sem_flg = 0;
+	struct sembuf sbArray;
+	sbArray.sem_num = beaconId - 1;
+	sbArray.sem_op = 1;
+	sbArray.sem_flg = 0;
+	struct sembuf sbMutex;
+	sbMutex.sem_num = nBeacons;
+	sbMutex.sem_op = -1;
+	sbMutex.sem_flg = 0;
 	double* sharedVar;
 	
 	while (TRUE) {
@@ -186,9 +201,11 @@ void *eagerMeasure(void* bId) {
 		sharedVar = (double*) shmat(shmId, NULL, 0);
 		*(sharedVar + beaconId - 1) = measure;
 		shmdt((void*) sharedVar);
-		semop(semId, &sb, 1);
+		semop(semId, &sbArray, 1);
 
 		printf("Eager measure %u: %.9f\n", beaconId, measure);
+		
+		semop(semId, &sbMutex, 1);
 	}
 }
 
@@ -240,4 +257,3 @@ void quitSignalHandler(int signum) {
 	nanosleep(&delay, NULL);
 	exit(EXIT_SUCCESS);
 }
-
